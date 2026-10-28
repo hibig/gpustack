@@ -259,6 +259,36 @@ def _gpu_instance_type_late_columns() -> List[sa.Column]:
     ]
 
 
+def _upgrade_dashboard_usage() -> None:
+    if table_exists('model_usages') and not column_exists('model_usages', 'cluster_id'):
+        op.add_column('model_usages', sa.Column('cluster_id', sa.Integer(), nullable=True))
+    for name in ('model_usage_details', 'model_usage_details_archive'):
+        for column in ('consumer_name', 'consumer_principal_kind'):
+            if table_exists(name) and not column_exists(name, column):
+                op.add_column(name, sa.Column(column, sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+        if table_exists(name) and not column_exists(name, 'request_count'):
+            op.add_column(name, sa.Column('request_count', sa.BigInteger(), nullable=False, server_default='1'))
+    for name in ('model_usages', 'model_usage_details', 'model_usage_details_archive'):
+        index = f'ix_{name}_dashboard_scope_date'
+        if table_exists(name) and not _index_exists(name, index):
+            op.create_index(index, name, ['consumer_principal_id', 'date', 'cluster_id'])
+
+
+def _downgrade_dashboard_usage() -> None:
+    for name in ('model_usages', 'model_usage_details', 'model_usage_details_archive'):
+        index = f'ix_{name}_dashboard_scope_date'
+        if table_exists(name) and _index_exists(name, index):
+            op.drop_index(index, table_name=name)
+    for name in ('model_usage_details', 'model_usage_details_archive'):
+        for column in ('consumer_name', 'consumer_principal_kind'):
+            if table_exists(name) and column_exists(name, column):
+                op.drop_column(name, column)
+        if table_exists(name) and column_exists(name, 'request_count'):
+            op.drop_column(name, 'request_count')
+    if table_exists('model_usages') and column_exists('model_usages', 'cluster_id'):
+        op.drop_column('model_usages', 'cluster_id')
+
+
 def upgrade() -> None:
     """Every step checks for its own object first.
 
@@ -273,6 +303,7 @@ def upgrade() -> None:
     never got to the guarded part, so the promise above held for one section and was
     false for the revision.
     """
+    _upgrade_dashboard_usage()
     _upgrade_model_revisions()
     if not table_exists('gpu_instance_types'):
         op.create_table(
@@ -394,6 +425,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _downgrade_dashboard_usage()
     if table_exists('model_revisions'):
         op.drop_table('model_revisions')
     if column_exists('models', 'revision_history_limit'):

@@ -50,6 +50,8 @@ class ModelUsageDetails(SQLModel, BaseModelMixin, table=True):
     consumer_principal_id: Optional[int] = Field(
         default=None, sa_column=Column(Integer)
     )
+    consumer_name: Optional[str] = Field(default=None)
+    consumer_principal_kind: Optional[str] = Field(default=None)
     provider_id: Optional[int] = Field(default=None, sa_column=Column(Integer))
     provider_name: Optional[str] = Field(default=None)
     provider_type: Optional[str] = Field(default=None)
@@ -60,6 +62,9 @@ class ModelUsageDetails(SQLModel, BaseModelMixin, table=True):
     access_key: Optional[str] = Field(default=None)
     api_key_is_custom: Optional[bool] = Field(default=None)
     date: date
+    request_count: int = Field(
+        default=1, sa_column=Column(BigInteger, nullable=False, server_default='1')
+    )
     prompt_token_count: int = Field(
         default=..., sa_column=Column(BigInteger, nullable=False)
     )
@@ -153,6 +158,8 @@ class ModelUsageDetailsArchive(SQLModel, BaseModelMixin, table=True):
     consumer_principal_id: Optional[int] = Field(
         default=None, sa_column=Column(Integer)
     )
+    consumer_name: Optional[str] = Field(default=None)
+    consumer_principal_kind: Optional[str] = Field(default=None)
     provider_id: Optional[int] = Field(default=None, sa_column=Column(Integer))
     provider_name: Optional[str] = Field(default=None)
     provider_type: Optional[str] = Field(default=None)
@@ -163,6 +170,9 @@ class ModelUsageDetailsArchive(SQLModel, BaseModelMixin, table=True):
     access_key: Optional[str] = Field(default=None)
     api_key_is_custom: Optional[bool] = Field(default=None)
     date: date
+    request_count: int = Field(
+        default=1, sa_column=Column(BigInteger, nullable=False, server_default='1')
+    )
     prompt_token_count: int = Field(
         default=..., sa_column=Column(BigInteger, nullable=False)
     )

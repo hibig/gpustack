@@ -117,6 +117,18 @@ async def test_reported_ids_and_ttft_land_on_the_audit_row(session):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_snapshots_and_batch_request_count_survive_ingest(session):
+    metric = _metric(cluster_id=17, request_count=3)
+    await store_usage_metrics([metric], [metric])
+    (detail,) = await _details(session)
+    (rollup,) = (await session.exec(select(ModelUsage))).all()
+    assert detail.cluster_id == rollup.cluster_id == 17
+    assert detail.request_count == rollup.request_count == 3
+    assert detail.consumer_name == rollup.consumer_name == 'alice'
+    assert detail.consumer_principal_kind == rollup.consumer_principal_kind == 'user'
+
+
+@pytest.mark.asyncio
 async def test_a_report_carrying_none_of_them_stores_nulls(session):
     """Each is absent in ordinary traffic -- ``ttft_ms`` on every
     non-streaming request, ``upstream_response_id`` whenever the upstream

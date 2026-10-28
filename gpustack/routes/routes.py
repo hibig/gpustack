@@ -12,6 +12,7 @@ from gpustack.routes import (
     cluster_access,
     config,
     dashboard,
+    dashboard_overview,
     debug,
     draft_models,
     gpu_devices,
@@ -364,6 +365,11 @@ tenant_routers = model_routers + [
     # ``GET /dashboard`` and the ``/usage`` endpoints stay platform
     # admin only.
     {"router": dashboard.router, "prefix": "/dashboard", "tags": ["Dashboard"]},
+    {
+        "router": dashboard_overview.router,
+        "prefix": "/dashboard",
+        "tags": ["Dashboard"],
+    },
     # cluster_access GET is open to anyone who can see the cluster
     # (cluster-detail audience); POST / DELETE gate inside the
     # handler to platform admin OR cluster owner Org owner

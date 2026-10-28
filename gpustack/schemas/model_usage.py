@@ -38,6 +38,7 @@ class ModelUsage(SQLModel, ActiveRecordMixin, table=True):
     provider_name: Optional[str] = Field(default=None)
     provider_type: Optional[str] = Field(default=None)
     cluster_name: Optional[str] = Field(default=None)
+    cluster_id: Optional[int] = Field(default=None, sa_column=Column(Integer))
     api_key_id: Optional[int] = Field(default=None, sa_column=Column(Integer))
     api_key_name: Optional[str] = Field(default=None)
     access_key: Optional[str] = Field(default=None)

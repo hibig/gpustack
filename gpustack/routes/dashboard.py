@@ -403,6 +403,7 @@ async def get_model_usage_summary(
 async def _get_maas_active_models(
     session: AsyncSession,
     owner_principal_id: Optional[int] = None,
+    consumer_principal_id: Optional[int] = None,
 ) -> List[ModelSummary]:
     if owner_principal_id is None:
         all_providers = await ModelProvider.all_by_fields(
@@ -441,6 +442,10 @@ async def _get_maas_active_models(
         .order_by(func.coalesce(total_tokens, 0).desc())
         .limit(10)
     )
+    if consumer_principal_id is not None:
+        statement = statement.where(
+            ModelUsage.consumer_principal_id == consumer_principal_id
+        )
     top_model_usages = (await session.exec(statement)).all()
 
     models_by_provider_and_name = {
@@ -473,9 +478,14 @@ async def _get_gpustack_active_models(
     session: AsyncSession,
     cluster_id: Optional[int] = None,
     owner_principal_id: Optional[int] = None,
+    consumer_principal_id: Optional[int] = None,
+    filter_usage_cluster: bool = False,
 ) -> List[ModelSummary]:
     statement = active_model_statement(
-        cluster_id=cluster_id, owner_principal_id=owner_principal_id
+        cluster_id=cluster_id,
+        owner_principal_id=owner_principal_id,
+        consumer_principal_id=consumer_principal_id,
+        filter_usage_cluster=filter_usage_cluster,
     )
 
     results = (await session.exec(statement)).all()
@@ -527,10 +537,20 @@ async def get_active_models(
     session: AsyncSession,
     cluster_id: Optional[int] = None,
     owner_principal_id: Optional[int] = None,
+    consumer_principal_id: Optional[int] = None,
+    filter_usage_cluster: bool = False,
 ) -> List[ModelSummary]:
-    summary = await _get_gpustack_active_models(session, cluster_id, owner_principal_id)
+    summary = await _get_gpustack_active_models(
+        session,
+        cluster_id,
+        owner_principal_id,
+        consumer_principal_id,
+        filter_usage_cluster,
+    )
     if cluster_id is None:
-        maas_active_models = await _get_maas_active_models(session, owner_principal_id)
+        maas_active_models = await _get_maas_active_models(
+            session, owner_principal_id, consumer_principal_id
+        )
         summary.extend(maas_active_models)
     summary.sort(key=lambda x: x.token_count, reverse=True)
     summary = summary[:10]
@@ -560,6 +580,8 @@ def aggregate_resource_claim(
 def active_model_statement(
     cluster_id: Optional[int],
     owner_principal_id: Optional[int] = None,
+    consumer_principal_id: Optional[int] = None,
+    filter_usage_cluster: bool = False,
 ) -> select:
     usage_sum_query = (
         select(
@@ -570,7 +592,14 @@ def active_model_statement(
         )
         .outerjoin(ModelUsage, Model.id == ModelUsage.model_id)
         .group_by(Model.id)
-    ).alias('usage_sum')
+    )
+    if consumer_principal_id is not None:
+        usage_sum_query = usage_sum_query.where(
+            ModelUsage.consumer_principal_id == consumer_principal_id
+        )
+    if cluster_id is not None and filter_usage_cluster:
+        usage_sum_query = usage_sum_query.where(ModelUsage.cluster_id == cluster_id)
+    usage_sum_query = usage_sum_query.alias('usage_sum')
 
     statement = select(
         Model.id,

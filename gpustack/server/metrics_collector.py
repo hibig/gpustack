@@ -238,6 +238,7 @@ def _make_buffer_key(metric: ModelUsageMetrics) -> str:
             metric.access_key,
             metric.organization_id,
             metric.model_route_id,
+            metric.cluster_id,
             operation,
             metric_date.isoformat(),
         ]
@@ -436,6 +437,7 @@ async def create_or_update_model_usage(
             "access_key": metric.access_key,
             "operation": metric.operation,
             "consumer_principal_id": metric.consumer_principal_id,
+            "cluster_id": metric.cluster_id,
             "date": metric.date,
         },
     )
@@ -828,6 +830,13 @@ async def store_usage_metrics(
                 )
                 model_usage = ModelUsage(
                     date=metric_date,
+                    cluster_id=(
+                        metric.cluster_id
+                        if metric.cluster_id is not None
+                        else getattr(
+                            model_by_id.get(metric.model_id), "cluster_id", None
+                        )
+                    ),
                     prompt_token_count=prompt_tokens,
                     completion_token_count=completion_tokens,
                     prompt_cached_token_count=metric.input_cached_token,
@@ -866,10 +875,8 @@ async def store_usage_metrics(
                 prompt_tokens, completion_tokens = _resolve_usage_tokens(
                     metric, model_by_id.get(metric.model_id)
                 )
-                # cluster_id only lives on the audit/details rows, not on
-                # the dashboard rollup (ModelUsage). Prefer the metric's
-                # own cluster_id (captured at request time, survives model
-                # deletes); fall back to the live model only when the
+                # Prefer the request-time cluster snapshot, which survives model
+                # deletion; fall back to the live model only when the
                 # ingest source didn't carry one (older gateway clients).
                 cluster_id = metric.cluster_id
                 if cluster_id is None:
@@ -882,7 +889,14 @@ async def store_usage_metrics(
                 session.add(
                     ModelUsageDetails(
                         date=metric_date,
+                        consumer_name=consumer_info_by_id.get(
+                            snapshot.get('consumer_principal_id'), (None, None)
+                        )[0],
+                        consumer_principal_kind=consumer_info_by_id.get(
+                            snapshot.get('consumer_principal_id'), (None, None)
+                        )[1],
                         cluster_id=cluster_id,
+                        request_count=metric.request_count,
                         prompt_token_count=prompt_tokens,
                         completion_token_count=completion_tokens,
                         prompt_cached_token_count=metric.input_cached_token,
