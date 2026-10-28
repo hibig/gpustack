@@ -318,7 +318,17 @@ async def query_user_organizations(
     c = source.c
     rows = (
         await session.execute(
-            select(c.user_id, c.organization_name).where(c.user_id.in_(ids)).distinct()
+            select(c.user_id, c.organization_name)
+            .where(
+                c.user_id.in_(ids),
+                or_(
+                    c.organization_kind == PrincipalType.ORG.value,
+                    c.organization_id.in_(
+                        select(Principal.id).where(Principal.kind == PrincipalType.ORG)
+                    ),
+                ),
+            )
+            .distinct()
         )
     ).all()
     names = {}

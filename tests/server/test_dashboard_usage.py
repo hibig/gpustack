@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.dialects import mysql, postgresql
 
 from gpustack.schemas.model_usage import ModelUsage
-from gpustack.schemas.dashboard_overview import DashboardMetrics
+from gpustack.schemas.dashboard_overview import DashboardMetrics, DashboardRank
 from gpustack.schemas.model_usage_details import (
     ModelUsageDetails,
     ModelUsageDetailsArchive,
@@ -149,6 +149,20 @@ async def test_top_users_group_by_id_and_filter_organizations_before_limiting():
     assert 'organization_kind' in sql
     assert 'ORDER BY sum(lifetime_usage.api_requests) DESC' in sql
     assert 'LIMIT' in sql
+
+
+@pytest.mark.asyncio
+async def test_user_organization_labels_exclude_personal_consumers():
+    result = Mock()
+    result.all.return_value = [(4, 'Example organization')]
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    ranks = [DashboardRank(id=4, name='Example user')]
+    await usage.query_user_organizations(session, usage.lifetime_source(), ranks)
+    statement = session.execute.call_args.args[0]
+    sql = str(statement.compile(compile_kwargs={'literal_binds': True}))
+    assert "lifetime_usage.organization_kind = 'org'" in sql
+    assert 'principals.kind' in sql
+    assert ranks[0].organizations == ['Example organization']
 
 
 def test_cluster_snapshots_partition_the_ingest_buffer():
