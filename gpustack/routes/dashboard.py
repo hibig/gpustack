@@ -727,7 +727,11 @@ async def usage(
         provider_model_names=get_models_by_provider_id(provider_model_names or []),
         owner_principal_id=owner_principal_id,
     )
-    return ItemList[ModelUsage](items=items)
+    # Cluster attribution belongs to the overview contract; keep the legacy
+    # raw-usage payload independent of this storage-only dimension.
+    return ItemList[ModelUsage](items=items).model_dump(
+        mode='json', exclude={'items': {'__all__': {'cluster_id'}}}
+    )
 
 
 @router.get("/usage/stats")

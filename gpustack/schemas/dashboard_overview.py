@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from gpustack.schemas.dashboard import ModelSummary
 
@@ -25,21 +25,25 @@ class DashboardBucket(DashboardMetrics):
 class DashboardRank(DashboardMetrics):
     id: Optional[int] = None
     name: str
-    kind: Optional[str] = None
-    organizations: List[str] = Field(default_factory=list)
 
 
-class DashboardModel(DashboardMetrics):
+class DashboardRoute(DashboardMetrics):
     key: str
     id: Optional[int] = None
-    provider_id: Optional[int] = None
-    provider_name: Optional[str] = None
     name: str
+    deleted: bool = False
 
 
 class DashboardOption(BaseModel):
     id: int
     name: str
+
+
+class DashboardQuery(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    period: Literal['24h', '7d', '30d'] = '7d'
+    cluster_id: Optional[int] = Field(default=None, gt=0)
 
 
 class DashboardOverview(BaseModel):
@@ -55,15 +59,11 @@ class DashboardOverview(BaseModel):
     today: DashboardMetrics
     lifetime: DashboardMetrics
     buckets: List[DashboardBucket]
-    models_by_tokens: List[DashboardModel]
-    models_by_requests: List[DashboardModel]
-    model_count: int
-    organizations_by_tokens: List[DashboardRank]
-    organizations_by_requests: List[DashboardRank]
+    routes_by_tokens: List[DashboardRoute]
+    routes_by_requests: List[DashboardRoute]
+    route_count: int
     users_by_tokens: List[DashboardRank]
     users_by_requests: List[DashboardRank]
-    organization_count: int
     active_models: List[ModelSummary]
-    organizations: List[DashboardOption]
     clusters: List[DashboardOption]
     unassigned_cluster_requests: int = 0

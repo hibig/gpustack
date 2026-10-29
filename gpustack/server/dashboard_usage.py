@@ -5,6 +5,7 @@ details, including archived rows, so a comparison never includes a future part
 of the previous period. No live model join is used to attribute historical usage.
 """
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Mapping, Optional, Tuple
@@ -16,16 +17,18 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from gpustack.schemas.dashboard_overview import (
     DashboardBucket,
     DashboardMetrics,
-    DashboardModel,
+    DashboardRoute,
     DashboardRank,
 )
 from gpustack.schemas.model_usage import ModelUsage
+from gpustack.schemas.model_routes import ModelRoute
 from gpustack.schemas.model_usage_details import (
     ModelUsageDetails,
     ModelUsageDetailsArchive,
 )
-from gpustack.schemas.principals import Principal, PrincipalType
+from gpustack.schemas.principals import Principal
 from gpustack.utils.rollup_tz import resolve_rollup_tz
+from gpustack.utils.usage_snapshots import format_usage_route_label
 
 
 @dataclass(frozen=True)
@@ -85,29 +88,19 @@ def usage_conditions(
 
 
 def _projection(table, bucket):
-    organization_name = func.coalesce(table.consumer_name, Principal.name)
-    organization_kind = func.coalesce(
+    consumer_name = func.coalesce(table.consumer_name, Principal.name)
+    consumer_kind = func.coalesce(
         table.consumer_principal_kind, cast(Principal.kind, String)
-    )
-    model_key = case(
-        (table.model_id.is_not(None), literal('model:') + cast(table.model_id, String)),
-        else_=literal('provider:')
-        + func.coalesce(cast(table.provider_id, String), '')
-        + ':'
-        + table.model_name,
     )
     return [
         bucket.label('bucket'),
         table.user_id,
         table.user_name,
-        table.consumer_principal_id.label('organization_id'),
-        organization_name.label('organization_name'),
-        organization_kind.label('organization_kind'),
-        table.model_id,
-        table.model_name,
-        table.provider_id,
-        table.provider_name,
-        model_key.label('model_key'),
+        table.consumer_principal_id.label('consumer_id'),
+        consumer_name.label('consumer_name'),
+        consumer_kind.label('consumer_kind'),
+        table.model_route_id.label('route_id'),
+        table.model_route_name.label('route_name'),
         table.prompt_token_count.label('input_tokens'),
         table.prompt_cached_token_count.label('input_cached_tokens'),
         table.completion_token_count.label('output_tokens'),
@@ -277,113 +270,87 @@ async def query_buckets(
     ]
 
 
-async def query_ranking(
-    session: AsyncSession, source: Subquery, dimension: str, metric: str
+async def query_users(
+    session: AsyncSession, source: Subquery, metric: str
 ) -> List[DashboardRank]:
     c = source.c
-    identity, name = c[f'{dimension}_id'], c[f'{dimension}_name']
-    statement = select(
-        identity.label('id'), func.max(name).label('name'), *metric_columns(source)
-    ).where(identity.is_not(None))
-    if dimension == 'organization':
-        statement = statement.where(
-            or_(
-                c.organization_kind == PrincipalType.ORG.value,
-                c.organization_id.in_(
-                    select(Principal.id).where(Principal.kind == PrincipalType.ORG)
-                ),
-            )
-        )
-    order = (
-        func.sum(c.input_tokens + c.output_tokens)
-        if metric == 'tokens'
-        else func.sum(c.api_requests)
-    )
-    statement = statement.group_by(identity).order_by(order.desc(), identity).limit(10)
-    rows = (await session.execute(statement)).mappings().all()
-    return [
-        DashboardRank(
-            id=r['id'], name=r['name'] or 'Unknown', **metrics(r).model_dump()
-        )
-        for r in rows
-    ]
-
-
-async def query_user_organizations(
-    session: AsyncSession, source: Subquery, ranks: List[DashboardRank]
-) -> None:
-    ids = {r.id for r in ranks}
-    if not ids:
-        return
-    c = source.c
-    rows = (
-        await session.execute(
-            select(c.user_id, c.organization_name)
-            .where(
-                c.user_id.in_(ids),
-                or_(
-                    c.organization_kind == PrincipalType.ORG.value,
-                    c.organization_id.in_(
-                        select(Principal.id).where(Principal.kind == PrincipalType.ORG)
-                    ),
-                ),
-            )
-            .distinct()
-        )
-    ).all()
-    names = {}
-    for user_id, name in rows:
-        if name:
-            names.setdefault(user_id, set()).add(name)
-    for rank in ranks:
-        rank.organizations = sorted(names.get(rank.id, []))
-
-
-async def query_models(
-    session: AsyncSession, source: Subquery, metric: str
-) -> List[DashboardModel]:
-    c = source.c
-    columns = [
-        func.max(c[key]).label(key)
-        for key in ('model_id', 'model_name', 'provider_id', 'provider_name')
-    ]
     order = (
         func.sum(c.input_tokens + c.output_tokens)
         if metric == 'tokens'
         else func.sum(c.api_requests)
     )
     statement = (
-        select(c.model_key, *columns, *metric_columns(source))
-        .group_by(c.model_key)
-        .order_by(order.desc(), c.model_key)
-        .limit(5)
+        select(
+            c.user_id.label('id'),
+            func.max(c.user_name).label('name'),
+            *metric_columns(source),
+        )
+        .where(c.user_id.is_not(None))
+        .group_by(c.user_id)
+        .order_by(order.desc(), c.user_id)
+        .limit(10)
     )
     rows = (await session.execute(statement)).mappings().all()
     return [
-        DashboardModel(
-            key=r['model_key'],
-            id=r['model_id'],
-            name=r['model_name'],
-            provider_id=r['provider_id'],
-            provider_name=r['provider_name'],
+        DashboardRank(
+            id=row['id'], name=row['name'] or 'Unknown', **metrics(row).model_dump()
+        )
+        for row in rows
+    ]
+
+
+async def query_routes(
+    session: AsyncSession, source: Subquery, metric: str
+) -> List[DashboardRoute]:
+    c = source.c
+    order = (
+        func.sum(c.input_tokens + c.output_tokens)
+        if metric == 'tokens'
+        else func.sum(c.api_requests)
+    )
+    statement = (
+        select(c.route_id, c.route_name, *metric_columns(source))
+        .group_by(c.route_id, c.route_name)
+        .order_by(order.desc(), c.route_id, c.route_name)
+        .limit(10)
+    )
+    rows = (await session.execute(statement)).mappings().all()
+    ids = {r['route_id'] for r in rows if r['route_id'] is not None}
+    existing = set()
+    if ids:
+        existing = set(
+            (await session.execute(select(ModelRoute.id).where(ModelRoute.id.in_(ids))))
+            .scalars()
+            .all()
+        )
+    return [
+        DashboardRoute(
+            key='route:' + json.dumps([r['route_id'], r['route_name']]),
+            id=r['route_id'],
+            name=format_usage_route_label(r['route_name']),
+            deleted=(
+                bool(r['route_id'] is not None or r['route_name'])
+                and r['route_id'] not in existing
+            ),
             **metrics(r).model_dump(),
         )
         for r in rows
     ]
 
 
-async def query_dimension_counts(
-    session: AsyncSession, source: Subquery
-) -> Tuple[int, int]:
-    c = source.c
-    is_org = or_(
-        c.organization_kind == PrincipalType.ORG.value,
-        c.organization_id.in_(
-            select(Principal.id).where(Principal.kind == PrincipalType.ORG)
-        ),
-    )
-    statement = select(
-        func.count(func.distinct(c.model_key)),
-        func.count(func.distinct(case((is_org, c.organization_id), else_=None))),
-    )
-    return tuple((await session.execute(statement)).one())
+async def query_route_count(session: AsyncSession, source: Subquery) -> int:
+    groups = select(source.c.route_id, source.c.route_name).distinct().subquery()
+    return (
+        await session.execute(select(func.count()).select_from(groups))
+    ).scalar_one()
+
+
+async def begin_snapshot(session: AsyncSession) -> None:
+    """Keep related aggregates in one stable snapshot when supported."""
+    if not session.in_transaction() and session.get_bind().dialect.name in (
+        'postgresql',
+        'mysql',
+    ):
+        await session.connection(
+            execution_options={'isolation_level': 'REPEATABLE READ'}
+        )

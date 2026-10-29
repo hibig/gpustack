@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.dialects import mysql, postgresql
 
 from gpustack.schemas.model_usage import ModelUsage
-from gpustack.schemas.dashboard_overview import DashboardMetrics, DashboardRank
+from gpustack.schemas.dashboard_overview import DashboardMetrics
 from gpustack.schemas.model_usage_details import (
     ModelUsageDetails,
     ModelUsageDetailsArchive,
@@ -135,34 +135,15 @@ async def test_empty_buckets_remain_visible_and_do_not_inflate_activity():
 
 
 @pytest.mark.asyncio
-async def test_top_users_group_by_id_and_filter_organizations_before_limiting():
+async def test_top_users_group_by_id_with_no_organization_enrichment():
     result = Mock()
     result.mappings.return_value.all.return_value = []
     session = SimpleNamespace(execute=AsyncMock(return_value=result))
-    source = usage.lifetime_source(7)
-    await usage.query_ranking(session, source, 'user', 'tokens')
+    await usage.query_users(session, usage.lifetime_source(7), 'tokens')
     sql = str(session.execute.call_args.args[0])
     assert 'GROUP BY lifetime_usage.user_id' in sql
     assert 'GROUP BY lifetime_usage.user_name' not in sql
-    await usage.query_ranking(session, source, 'organization', 'requests')
-    sql = str(session.execute.call_args.args[0])
-    assert 'organization_kind' in sql
-    assert 'ORDER BY sum(lifetime_usage.api_requests) DESC' in sql
     assert 'LIMIT' in sql
-
-
-@pytest.mark.asyncio
-async def test_user_organization_labels_exclude_personal_consumers():
-    result = Mock()
-    result.all.return_value = [(4, 'Example organization')]
-    session = SimpleNamespace(execute=AsyncMock(return_value=result))
-    ranks = [DashboardRank(id=4, name='Example user')]
-    await usage.query_user_organizations(session, usage.lifetime_source(), ranks)
-    statement = session.execute.call_args.args[0]
-    sql = str(statement.compile(compile_kwargs={'literal_binds': True}))
-    assert "lifetime_usage.organization_kind = 'org'" in sql
-    assert 'principals.kind' in sql
-    assert ranks[0].organizations == ['Example organization']
 
 
 def test_cluster_snapshots_partition_the_ingest_buffer():
@@ -236,3 +217,52 @@ def test_deployment_usage_filters_the_consumer_and_historical_cluster():
     assert 'model_usages.consumer_principal_id = 7' in sql
     assert 'model_usages.cluster_id = 3' in sql
     assert 'models.owner_principal_id = 7' not in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('metric', ['tokens', 'requests'])
+async def test_route_distribution_keeps_usage_identities_and_untracked_history(metric):
+    identities = [(1, 'same'), (2, 'same'), (1, 'renamed'), (None, None), (9, 'gone')]
+    rows = [
+        dict(route_id=id, route_name=name, input_tokens=10, api_requests=1)
+        for id, name in identities
+    ]
+    grouped = Mock()
+    grouped.mappings.return_value.all.return_value = rows
+    live = Mock()
+    live.scalars.return_value.all.return_value = [1, 2]
+    session = SimpleNamespace(execute=AsyncMock(side_effect=[grouped, live]))
+
+    result = await usage.query_routes(session, usage.lifetime_source(), metric)
+
+    assert len({row.key for row in result}) == 5
+    assert [row.name for row in result] == [
+        'same',
+        'same',
+        'renamed',
+        'Untracked',
+        'gone',
+    ]
+    assert [row.deleted for row in result] == [False, False, False, False, True]
+    assert sum(row.total_tokens for row in result) == 50
+    sql = str(
+        session.execute.call_args_list[0]
+        .args[0]
+        .compile(compile_kwargs={'literal_binds': True})
+    )
+    assert 'GROUP BY lifetime_usage.route_id, lifetime_usage.route_name' in sql
+    assert 'LIMIT 10' in sql
+    assert 'GROUP BY lifetime_usage.model_id' not in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('dialect', [postgresql.dialect(), mysql.dialect()])
+async def test_route_group_count_includes_untracked_and_snapshot_names(dialect):
+    result = Mock()
+    result.scalar_one.return_value = 7
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    assert await usage.query_route_count(session, usage.lifetime_source()) == 7
+    sql = str(session.execute.call_args.args[0].compile(dialect=dialect))
+    assert 'SELECT DISTINCT lifetime_usage.route_id' in sql
+    assert 'lifetime_usage.route_name' in sql
+    assert 'route_id IS NOT NULL' not in sql

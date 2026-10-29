@@ -187,13 +187,13 @@ def test_make_buffer_key():
         completed_at=_FIXED_COMPLETED_AT_MS,
     )
     # Segment order: model_id, provider_id, model, user_id, access_key,
-    # organization_id, model_route_id, operation, date.
-    assert _make_buffer_key(m) == f"1..qwen3-0.6b.2.abc..9..{_FIXED_DATE_ISO}"
+    # organization_id, model_route_id, cluster_id, operation, date.
+    assert _make_buffer_key(m) == f"1..qwen3-0.6b.2.abc..9...{_FIXED_DATE_ISO}"
 
 
 def test_make_buffer_key_none_fields():
     m = ModelUsageMetrics(model="qwen3-0.6b", completed_at=_FIXED_COMPLETED_AT_MS)
-    assert _make_buffer_key(m) == f"..qwen3-0.6b......{_FIXED_DATE_ISO}"
+    assert _make_buffer_key(m) == f"..qwen3-0.6b.......{_FIXED_DATE_ISO}"
 
 
 def test_make_buffer_key_route_separates_otherwise_identical_metrics():

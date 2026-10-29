@@ -34,7 +34,8 @@ FLUSH_INTERVAL_SECONDS = 10
 
 # Buffer to accumulate pushed gateway metrics: {key: ModelUsageMetrics}.
 # Key format (see ``_make_buffer_key``):
-#   "{model_id}.{provider_id}.{model}.{user_id}.{access_key}.{operation}.{date}"
+#   "{model_id}.{provider_id}.{model}.{user_id}.{access_key}.{organization_id}."
+#   "{model_route_id}.{cluster_id}.{operation}.{date}"
 # ``operation`` and ``date`` are part of the key so per-operation rollups
 # stay separate and a stream that crosses midnight lands in the period
 # it ends in (anchored on completed_at). ``date`` is computed in the
@@ -820,8 +821,8 @@ async def store_usage_metrics(
                     metric, model_by_id.get(metric.model_id)
                 )
                 metric_date, _ = _resolve_metric_datetime(metric)
-                # Consumer display-name + kind snapshot (ModelUsage-only; kept
-                # out of the shared snapshot so the detail table isn't touched).
+                # Capture consumer display attributes alongside the stable
+                # principal ID for historical organization labels.
                 consumer_id = snapshot.get("consumer_principal_id")
                 consumer_info = (
                     consumer_info_by_id.get(consumer_id)
